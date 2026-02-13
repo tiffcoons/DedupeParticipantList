@@ -148,6 +148,17 @@ def normalize_generic(value: Any) -> str:
     return clean_text(value).lower()
 
 
+def parse_number(value: Any) -> Optional[float]:
+    raw = clean_text(value)
+    if not raw:
+        return None
+    normalized = raw.replace(",", "").replace("$", "")
+    try:
+        return float(normalized)
+    except ValueError:
+        return None
+
+
 def read_uploaded_file(uploaded_file) -> pd.DataFrame:
     file_name = uploaded_file.name.lower()
     uploaded_file.seek(0)
@@ -451,12 +462,11 @@ def pick_primary_record(
     return min(member_indices)
 
 
-def build_dupe_flags(
+def build_confirmed_groups(
     row_count: int,
     candidates: List[Dict[str, Any]],
     decisions: Dict[str, str],
-    create_dates: List[Any],
-) -> List[int]:
+) -> Dict[int, List[int]]:
     dsu = DisjointSet(row_count)
     for candidate in candidates:
         decision = decisions.get(candidate["pair_id"])
@@ -467,16 +477,74 @@ def build_dupe_flags(
     for row_idx in range(row_count):
         root = dsu.find(row_idx)
         groups.setdefault(root, []).append(row_idx)
+    for members in groups.values():
+        members.sort()
+    return groups
+
+
+def choose_group_participant_id(df_working: pd.DataFrame, primary_idx: int) -> str:
+    participant_id = clean_text(df_working.at[primary_idx, "Participant ID"])
+    if participant_id:
+        return participant_id
+    signup_id = clean_text(df_working.at[primary_idx, "Original Signup ID"])
+    if signup_id:
+        return signup_id
+    return f"ROW-{primary_idx + 1}"
+
+
+def build_dedupe_export_columns(
+    df_working: pd.DataFrame,
+    candidates: List[Dict[str, Any]],
+    decisions: Dict[str, str],
+    create_dates: List[Any],
+    program_ppf: float,
+) -> Tuple[List[int], List[str], List[Any], List[Any]]:
+    row_count = len(df_working)
+    groups = build_confirmed_groups(row_count, candidates, decisions)
 
     dupe_flags = [0] * row_count
+    dupe_participant_ids = [""] * row_count
+
     for members in groups.values():
-        if len(members) <= 1:
-            continue
         primary = pick_primary_record(members, create_dates)
+        canonical_participant_id = choose_group_participant_id(df_working, primary)
         for member in members:
-            if member != primary:
+            dupe_participant_ids[member] = canonical_participant_id
+            if len(members) > 1 and member != primary:
                 dupe_flags[member] = 1
-    return dupe_flags
+
+    combo_members: Dict[Tuple[str, str], List[int]] = {}
+    combo_elig_sum: Dict[Tuple[str, str], float] = {}
+    combo_has_elig_value: Dict[Tuple[str, str], bool] = {}
+
+    for row_idx in range(row_count):
+        participant_id_key = dupe_participant_ids[row_idx]
+        affiliation_key = normalize_generic(df_working.at[row_idx, "Affiliation"])
+        combo_key = (participant_id_key, affiliation_key)
+        combo_members.setdefault(combo_key, []).append(row_idx)
+
+        elig_value = parse_number(df_working.at[row_idx, "Elig. Feedback"])
+        combo_elig_sum[combo_key] = combo_elig_sum.get(combo_key, 0.0) + (
+            elig_value if elig_value is not None else 0.0
+        )
+        combo_has_elig_value[combo_key] = combo_has_elig_value.get(combo_key, False) or (
+            elig_value is not None
+        )
+
+    dedupe_eligible: List[Any] = [""] * row_count
+    total_value: List[Any] = [""] * row_count
+    ppf = max(float(program_ppf), 0.0)
+
+    for combo_key, members in combo_members.items():
+        if not combo_has_elig_value.get(combo_key, False):
+            continue
+        combo_primary = pick_primary_record(members, create_dates)
+        combo_sum = combo_elig_sum.get(combo_key, 0.0)
+        capped_sum = min(combo_sum, 75.0)
+        dedupe_eligible[combo_primary] = round(capped_sum, 2)
+        total_value[combo_primary] = round(capped_sum * ppf, 2)
+
+    return dupe_flags, dupe_participant_ids, dedupe_eligible, total_value
 
 
 def decision_counts(decisions: Dict[str, str]) -> Tuple[int, int]:
@@ -835,21 +903,25 @@ def main() -> None:
     st.dataframe(preview_df, use_container_width=True, hide_index=True)
 
     create_dates = pd.to_datetime(df_working["Create Date"], errors="coerce").tolist()
-    dupe_flags = build_dupe_flags(
-        row_count=len(df_original),
+    dupe_flags, dupe_participant_ids, dedupe_eligible, total_value = build_dedupe_export_columns(
+        df_working=df_working,
         candidates=candidates,
         decisions=st.session_state["decisions"],
         create_dates=create_dates,
+        program_ppf=float(st.session_state["program_ppf"]),
     )
     deduped = df_original.copy()
     deduped["dupe"] = dupe_flags
+    deduped["dupe participant id"] = dupe_participant_ids
+    deduped["dedupe eligible"] = dedupe_eligible
+    deduped["Total Value"] = total_value
     duplicate_rows = int(sum(dupe_flags))
 
     st.divider()
     st.subheader("Export reviewed result")
     st.write(
-        "The export includes the original dataset and a deduped copy with `dupe` column "
-        "(1 = marked as duplicate, 0 = not marked duplicate)."
+        "The export includes the original dataset and a deduped copy with `dupe`, "
+        "`dupe participant id`, `dedupe eligible`, and `Total Value` columns."
     )
     st.metric("Rows currently marked dupe=1", duplicate_rows)
 

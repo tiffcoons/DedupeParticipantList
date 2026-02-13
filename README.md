@@ -14,7 +14,11 @@ A local Streamlit web app for non-technical users to upload participant lists, d
    - Skip
 6. Exports an Excel workbook with:
    - `Original` sheet: unchanged uploaded data
-   - `Deduped` sheet: original data plus `dupe` column (`1` duplicate, `0` not duplicate)
+   - `Deduped` sheet: original data plus:
+     - `dupe` (`1` duplicate, `0` not duplicate)
+     - `dupe participant id` (canonical participant id for dedupe grouping)
+     - `dedupe eligible` (participant-id + affiliation eligibility sum, capped at 75; only first/original row has value)
+     - `Total Value` (`dedupe eligible * Program PPF`; only first/original row has value)
 
 Everything runs locally (no external API calls).
 
@@ -63,6 +67,18 @@ Optional extra signal:
 - Phone
 
 If a field is missing, it is safely treated as empty.
+
+### Export calculations
+
+- **dupe participant id**
+  - Duplicate-linked rows are assigned the same canonical participant id (based on the original/earliest row in that dedupe group).
+- **dedupe eligible**
+  - For each `(dupe participant id, affiliation)` combination, the app sums `Elig. Feedback`.
+  - The sum is capped at `75`.
+  - Only the first/original signup row in that combination gets the value; all other rows are blank.
+- **Total Value**
+  - `dedupe eligible * Program PPF`
+  - Only populated on the same first/original row as `dedupe eligible`.
 
 ---
 
