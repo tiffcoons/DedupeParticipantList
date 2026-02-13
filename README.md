@@ -127,6 +127,10 @@ Candidate pairs are sorted by score descending.
 
 - Generate candidates above a minimum score threshold (default `75`)
 - Limit output with **Max candidate pairs to generate** (default `1000`)
+- **Exact name match section**:
+  - Groups containing First + Last exact-name matches are shown together in one place
+  - Users can click **Confirm All Exact Name Match Groups** to confirm those groups at once
+- Only the remaining groups are shown in the regular review workflow
 - Review groups in a table with:
   - Confirm Duplicates
   - Not Duplicates
