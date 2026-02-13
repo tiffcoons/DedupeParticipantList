@@ -84,6 +84,7 @@ Candidate pairs are sorted by score descending.
   - Not duplicates
   - Skip
   - Prev / Next / Jump to pair number
+- If the current pair belongs to a larger connected duplicate set, the app shows all related rows in a single table for group review
 - Progress shows decided/skipped/total counts
 - A table of the first 50 candidates appears below the review panel
 

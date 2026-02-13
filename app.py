@@ -432,6 +432,55 @@ def detail_table(df_working: pd.DataFrame, row_idx: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def build_candidate_group_lookup(
+    candidates: List[Dict[str, Any]],
+    row_count: int,
+) -> Dict[int, List[int]]:
+    dsu = DisjointSet(row_count)
+    involved_rows = set()
+    for candidate in candidates:
+        i = candidate["i"]
+        j = candidate["j"]
+        dsu.union(i, j)
+        involved_rows.add(i)
+        involved_rows.add(j)
+
+    grouped: Dict[int, List[int]] = {}
+    for row_idx in involved_rows:
+        root = dsu.find(row_idx)
+        grouped.setdefault(root, []).append(row_idx)
+
+    lookup: Dict[int, List[int]] = {}
+    for members in grouped.values():
+        sorted_members = sorted(members)
+        for member in sorted_members:
+            lookup[member] = sorted_members
+    return lookup
+
+
+def duplicate_group_table(df_working: pd.DataFrame, row_indices: List[int]) -> pd.DataFrame:
+    fields = [
+        "Participant ID",
+        "Original Signup ID",
+        "Create Date",
+        "First Name",
+        "Last Name",
+        "Email",
+        "Phone",
+        "Signup IP",
+        "City Name",
+        "Country Name",
+        "Affiliation",
+    ]
+    rows: List[Dict[str, Any]] = []
+    for row_idx in row_indices:
+        row_data: Dict[str, Any] = {"Row #": row_idx + 1}
+        for field in fields:
+            row_data[field] = clean_text(df_working.at[row_idx, field])
+        rows.append(row_data)
+    return pd.DataFrame(rows)
+
+
 def set_decision_and_advance(pair_id: str, decision: str, total_candidates: int) -> None:
     st.session_state["decisions"][pair_id] = decision
     if st.session_state["review_index"] < total_candidates - 1:
@@ -542,9 +591,6 @@ def main() -> None:
     st.subheader("Data preview")
     st.dataframe(df_original.head(20), use_container_width=True, hide_index=True)
 
-    st.subheader("Standardized matching fields")
-    st.dataframe(df_working[EXPECTED_COLUMNS + OPTIONAL_COLUMNS].head(20), use_container_width=True, hide_index=True)
-
     mapping_rows = []
     for field in EXPECTED_COLUMNS + OPTIONAL_COLUMNS:
         source = st.session_state["column_mapping"].get(field)
@@ -625,6 +671,22 @@ def main() -> None:
     st.write("**Reasons:** " + "; ".join(candidate["reasons"]))
     current_decision = st.session_state["decisions"].get(candidate["pair_id"], "pending")
     st.caption(f"Current decision: {current_decision}")
+
+    group_lookup = build_candidate_group_lookup(candidates, len(df_working))
+    group_i = group_lookup.get(candidate["i"], [candidate["i"]])
+    group_j = group_lookup.get(candidate["j"], [candidate["j"]])
+    related_group_rows = sorted(set(group_i + group_j))
+    if len(related_group_rows) > 2:
+        st.markdown("#### Related possible duplicate group")
+        st.caption(
+            "This pair belongs to a larger potential duplicate set. "
+            "Review all related rows together:"
+        )
+        st.dataframe(
+            duplicate_group_table(df_working, related_group_rows),
+            hide_index=True,
+            use_container_width=True,
+        )
 
     left_col, right_col = st.columns(2)
     with left_col:
