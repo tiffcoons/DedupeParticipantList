@@ -77,6 +77,21 @@ If a field is missing, it is safely treated as empty.
 
 The app normalizes configured weights to sum to 1.0.
 
+The following fields are still loaded and available for review/export, but are **not used as matching signals**:
+
+- Total Referrals
+- Referral Feedback
+- Feedback Group
+- Gross Feedback
+- Company Suggestions
+- HXC Program Feedback
+- Over Program Limit (>75)
+- Insights Elig. Feedback
+- Elig. Feedback
+- Feedback Left to Give
+- Payout Elig. Feedback (Last 300 Days)
+- Payout Elig. Net
+
 ### Additional helpful signals (small bonus points)
 
 - Original Signup ID exact match
@@ -84,10 +99,8 @@ The app normalizes configured weights to sum to 1.0.
 - Device exact match
 - City/ZIP or City/Country exact match
 - Affiliation exact match
-- Contact preference / UTM medium / feedback-group exact matches
-- Total referrals exact match
-- Payout eligibility feedback exact match
-- Payout net near-exact and PPF-adjusted alignment using Program PPF
+- Contact preference exact match
+- UTM medium exact match
 - Close signup dates
 
 Candidate pairs are sorted by score descending.
