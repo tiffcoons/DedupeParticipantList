@@ -1,6 +1,6 @@
 # Participant Duplicate Sign-up Review App
 
-A local Streamlit web app for non-technical users to upload participant lists, detect likely duplicate sign-ups, review candidate pairs, and export a deduped result.
+A local Streamlit web app for non-technical users to upload participant lists, detect likely duplicate sign-ups, review duplicate groups, and export a deduped result.
 
 ## What this app does
 
@@ -8,10 +8,10 @@ A local Streamlit web app for non-technical users to upload participant lists, d
 2. Prompts for Program PPF (default `1.6`) after upload
 3. Standardizes expected fields (missing fields are treated as empty)
 4. Scores likely duplicate pairs using fuzzy + exact signals
-5. Lets users review one candidate pair at a time:
-   - Confirm duplicates
-   - Not duplicates
-   - Skip
+5. Lets users review one duplicate group at a time:
+   - Confirm Duplicates
+   - Not Duplicates
+   - Some Duplicates (then review that group as individual pairs)
 6. Exports an Excel workbook with:
    - `Original` sheet: unchanged uploaded data
    - `Deduped` sheet: original data plus:
@@ -127,13 +127,13 @@ Candidate pairs are sorted by score descending.
 
 - Generate candidates above a minimum score threshold (default `75`)
 - Limit output with **Max candidate pairs to generate** (default `1000`)
-- Review with:
-  - Confirm duplicates
-  - Not duplicates
-  - Skip
-  - Prev / Next / Jump to pair number
-- If the current pair belongs to a larger connected duplicate set, the app shows all related rows in a single table for group review
-- Progress shows decided/skipped/total counts
+- Review groups in a table with:
+  - Confirm Duplicates
+  - Not Duplicates
+  - Some Duplicates
+  - Prev / Next / Jump to group number
+- If **Some Duplicates** is selected, the app switches that group to pair-by-pair review so each pair can be marked independently
+- Progress shows decided/in-progress/total group counts
 - A table of the first 50 candidates appears below the review panel
 
 When exporting, confirmed duplicate links are grouped transitively (A-B and B-C means A/B/C group). One primary record in each group stays `dupe=0`; others are marked `dupe=1`.

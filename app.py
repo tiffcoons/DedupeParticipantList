@@ -103,6 +103,8 @@ def init_session_state() -> None:
         "column_mapping": {},
         "candidates": [],
         "decisions": {},
+        "group_decisions": {},
+        "pair_review_index": {},
         "review_index": 0,
         "total_pairs_examined": 0,
         "program_ppf": 1.6,
@@ -115,6 +117,8 @@ def init_session_state() -> None:
 def reset_review_state() -> None:
     st.session_state["candidates"] = []
     st.session_state["decisions"] = {}
+    st.session_state["group_decisions"] = {}
+    st.session_state["pair_review_index"] = {}
     st.session_state["review_index"] = 0
     st.session_state["total_pairs_examined"] = 0
 
@@ -547,12 +551,6 @@ def build_dedupe_export_columns(
     return dupe_flags, dupe_participant_ids, dedupe_eligible, total_value
 
 
-def decision_counts(decisions: Dict[str, str]) -> Tuple[int, int]:
-    decided = sum(value in {"duplicate", "not_duplicate"} for value in decisions.values())
-    skipped = sum(value == "skipped" for value in decisions.values())
-    return decided, skipped
-
-
 def detail_table(df_working: pd.DataFrame, row_idx: int) -> pd.DataFrame:
     fields = STANDARDIZED_COLUMNS
     rows = []
@@ -561,30 +559,76 @@ def detail_table(df_working: pd.DataFrame, row_idx: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build_candidate_group_lookup(
+def build_review_groups(
     candidates: List[Dict[str, Any]],
     row_count: int,
-) -> Dict[int, List[int]]:
+) -> List[Dict[str, Any]]:
     dsu = DisjointSet(row_count)
-    involved_rows = set()
     for candidate in candidates:
-        i = candidate["i"]
-        j = candidate["j"]
-        dsu.union(i, j)
-        involved_rows.add(i)
-        involved_rows.add(j)
+        dsu.union(candidate["i"], candidate["j"])
 
-    grouped: Dict[int, List[int]] = {}
-    for row_idx in involved_rows:
-        root = dsu.find(row_idx)
-        grouped.setdefault(root, []).append(row_idx)
+    group_rows: Dict[int, set] = {}
+    group_pairs: Dict[int, List[Dict[str, Any]]] = {}
+    for candidate in candidates:
+        root = dsu.find(candidate["i"])
+        group_rows.setdefault(root, set()).update([candidate["i"], candidate["j"]])
+        group_pairs.setdefault(root, []).append(candidate)
 
-    lookup: Dict[int, List[int]] = {}
-    for members in grouped.values():
-        sorted_members = sorted(members)
-        for member in sorted_members:
-            lookup[member] = sorted_members
-    return lookup
+    groups: List[Dict[str, Any]] = []
+    for root, pairs in group_pairs.items():
+        rows = sorted(group_rows[root])
+        sorted_pairs = sorted(pairs, key=lambda item: item["score"], reverse=True)
+        group_id = "group:" + "-".join(str(row_idx) for row_idx in rows)
+        groups.append(
+            {
+                "group_id": group_id,
+                "rows": rows,
+                "pairs": sorted_pairs,
+                "pair_ids": [pair["pair_id"] for pair in sorted_pairs],
+                "max_score": sorted_pairs[0]["score"],
+                "avg_score": sum(pair["score"] for pair in sorted_pairs) / len(sorted_pairs),
+            }
+        )
+
+    groups.sort(key=lambda item: (item["max_score"], len(item["rows"])), reverse=True)
+    for rank, group in enumerate(groups, start=1):
+        group["rank"] = rank
+    return groups
+
+
+def group_review_status(
+    group: Dict[str, Any],
+    decisions: Dict[str, str],
+    group_decisions: Dict[str, str],
+) -> str:
+    group_id = group["group_id"]
+    group_decision = group_decisions.get(group_id)
+    if group_decision in {"duplicate", "not_duplicate"}:
+        return group_decision
+    if group_decision == "some_duplicates":
+        resolved_pairs = sum(
+            decisions.get(pair_id) in {"duplicate", "not_duplicate"} for pair_id in group["pair_ids"]
+        )
+        if resolved_pairs == len(group["pair_ids"]):
+            return "some_duplicates_complete"
+        return "some_duplicates_in_progress"
+    return "pending"
+
+
+def group_progress_counts(
+    review_groups: List[Dict[str, Any]],
+    decisions: Dict[str, str],
+    group_decisions: Dict[str, str],
+) -> Tuple[int, int, int]:
+    decided = 0
+    in_progress = 0
+    for group in review_groups:
+        status = group_review_status(group, decisions, group_decisions)
+        if status in {"duplicate", "not_duplicate", "some_duplicates_complete"}:
+            decided += 1
+        elif status == "some_duplicates_in_progress":
+            in_progress += 1
+    return decided, in_progress, len(review_groups)
 
 
 def duplicate_group_table(df_working: pd.DataFrame, row_indices: List[int]) -> pd.DataFrame:
@@ -624,17 +668,83 @@ def duplicate_group_table(df_working: pd.DataFrame, row_indices: List[int]) -> p
     return pd.DataFrame(rows)
 
 
-def set_decision_and_advance(pair_id: str, decision: str, total_candidates: int) -> None:
-    st.session_state["decisions"][pair_id] = decision
-    if st.session_state["review_index"] < total_candidates - 1:
+def build_group_pairs_table(
+    group: Dict[str, Any],
+    df_working: pd.DataFrame,
+    decisions: Dict[str, str],
+) -> pd.DataFrame:
+    rows: List[Dict[str, Any]] = []
+    for idx, pair in enumerate(group["pairs"], start=1):
+        i = pair["i"]
+        j = pair["j"]
+        rows.append(
+            {
+                "Pair #": idx,
+                "Row A": i + 1,
+                "Row B": j + 1,
+                "Score": round(pair["score"], 1),
+                "Decision": decisions.get(pair["pair_id"], "pending"),
+                "Name A": f"{clean_text(df_working.at[i, 'First Name'])} {clean_text(df_working.at[i, 'Last Name'])}".strip(),
+                "Name B": f"{clean_text(df_working.at[j, 'First Name'])} {clean_text(df_working.at[j, 'Last Name'])}".strip(),
+                "Email A": clean_text(df_working.at[i, "Email"]),
+                "Email B": clean_text(df_working.at[j, "Email"]),
+                "Reasons": "; ".join(pair["reasons"]),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def set_group_decision_and_update_pairs(
+    group: Dict[str, Any],
+    decision: str,
+    total_groups: int,
+) -> None:
+    group_id = group["group_id"]
+    if decision == "some_duplicates":
+        previous = st.session_state["group_decisions"].get(group_id)
+        st.session_state["group_decisions"][group_id] = "some_duplicates"
+        st.session_state["pair_review_index"].setdefault(group_id, 0)
+        if previous != "some_duplicates":
+            for pair_id in group["pair_ids"]:
+                st.session_state["decisions"].pop(pair_id, None)
+        st.rerun()
+        return
+
+    pair_decision = "duplicate" if decision == "duplicate" else "not_duplicate"
+    for pair_id in group["pair_ids"]:
+        st.session_state["decisions"][pair_id] = pair_decision
+    st.session_state["group_decisions"][group_id] = decision
+
+    if st.session_state["review_index"] < total_groups - 1:
         st.session_state["review_index"] += 1
     st.rerun()
 
 
-def move_review_index(delta: int, total_candidates: int) -> None:
+def move_review_index(delta: int, total_groups: int) -> None:
     new_index = st.session_state["review_index"] + delta
-    new_index = max(0, min(total_candidates - 1, new_index))
+    new_index = max(0, min(total_groups - 1, new_index))
     st.session_state["review_index"] = new_index
+    st.rerun()
+
+
+def set_pair_decision_and_advance(
+    group_id: str,
+    group_pairs: List[Dict[str, Any]],
+    decision: str,
+) -> None:
+    pair_idx = int(st.session_state["pair_review_index"].get(group_id, 0))
+    pair_idx = max(0, min(len(group_pairs) - 1, pair_idx))
+    pair_id = group_pairs[pair_idx]["pair_id"]
+    st.session_state["decisions"][pair_id] = decision
+    if pair_idx < len(group_pairs) - 1:
+        st.session_state["pair_review_index"][group_id] = pair_idx + 1
+    st.rerun()
+
+
+def move_group_pair_index(group_id: str, delta: int, total_pairs: int) -> None:
+    pair_idx = int(st.session_state["pair_review_index"].get(group_id, 0))
+    pair_idx = max(0, min(total_pairs - 1, pair_idx + delta))
+    st.session_state["pair_review_index"][group_id] = pair_idx
     st.rerun()
 
 
@@ -679,7 +789,7 @@ def main() -> None:
     init_session_state()
 
     st.title("Participant Sign-up Deduplication")
-    st.caption("Upload participant data, find likely duplicate sign-ups, review pairs, and export decisions.")
+    st.caption("Upload participant data, find likely duplicate sign-ups, review groups, and export decisions.")
 
     with st.sidebar:
         st.header("Settings")
@@ -788,6 +898,8 @@ def main() -> None:
             )
         st.session_state["candidates"] = candidates
         st.session_state["decisions"] = {}
+        st.session_state["group_decisions"] = {}
+        st.session_state["pair_review_index"] = {}
         st.session_state["review_index"] = 0
         st.session_state["total_pairs_examined"] = total_pairs
 
@@ -802,95 +914,209 @@ def main() -> None:
     if not candidates:
         return
 
-    total_candidates = len(candidates)
+    review_groups = build_review_groups(candidates, len(df_working))
+    if not review_groups:
+        st.warning("No duplicate groups are available for review.")
+        return
+
+    total_groups = len(review_groups)
     st.divider()
-    st.subheader("Review candidate pairs")
+    st.subheader("Duplicate group review")
 
     st.session_state["review_index"] = max(
-        0, min(st.session_state["review_index"], total_candidates - 1)
+        0, min(st.session_state["review_index"], total_groups - 1)
     )
-    idx = st.session_state["review_index"]
-    candidate = candidates[idx]
+    group_idx = st.session_state["review_index"]
+    group = review_groups[group_idx]
+    group_id = group["group_id"]
 
-    decided_count, skipped_count = decision_counts(st.session_state["decisions"])
-    reviewed_count = decided_count + skipped_count
+    decided_groups, in_progress_groups, _ = group_progress_counts(
+        review_groups=review_groups,
+        decisions=st.session_state["decisions"],
+        group_decisions=st.session_state["group_decisions"],
+    )
 
     st.write(
-        f"Progress: {decided_count} decided, {skipped_count} skipped, "
-        f"{total_candidates} total candidates."
+        f"Progress: {decided_groups} decided, {in_progress_groups} in progress, "
+        f"{total_groups} total groups."
     )
-    st.progress(reviewed_count / total_candidates)
+    st.progress(decided_groups / total_groups)
 
-    st.markdown(f"### Candidate {idx + 1} of {total_candidates}")
-    st.metric("Score", f"{candidate['score']:.1f}")
-    st.write("**Reasons:** " + "; ".join(candidate["reasons"]))
-    current_decision = st.session_state["decisions"].get(candidate["pair_id"], "pending")
-    st.caption(f"Current decision: {current_decision}")
+    current_status = group_review_status(
+        group=group,
+        decisions=st.session_state["decisions"],
+        group_decisions=st.session_state["group_decisions"],
+    )
+    status_labels = {
+        "pending": "pending",
+        "duplicate": "confirmed duplicates",
+        "not_duplicate": "not duplicates",
+        "some_duplicates_in_progress": "some duplicates (pair review in progress)",
+        "some_duplicates_complete": "some duplicates (pair review complete)",
+    }
 
-    group_lookup = build_candidate_group_lookup(candidates, len(df_working))
-    group_i = group_lookup.get(candidate["i"], [candidate["i"]])
-    group_j = group_lookup.get(candidate["j"], [candidate["j"]])
-    related_group_rows = sorted(set(group_i + group_j))
-    if len(related_group_rows) > 2:
-        st.markdown("#### Related possible duplicate group")
-        st.caption(
-            "This pair belongs to a larger potential duplicate set. "
-            "Review all related rows together:"
+    st.markdown(f"### Group {group_idx + 1} of {total_groups}")
+    metric_cols = st.columns(3)
+    with metric_cols[0]:
+        st.metric("Rows in group", len(group["rows"]))
+    with metric_cols[1]:
+        st.metric("Candidate pairs", len(group["pairs"]))
+    with metric_cols[2]:
+        st.metric("Top group score", f"{group['max_score']:.1f}")
+    st.caption(f"Current group decision: {status_labels.get(current_status, current_status)}")
+
+    st.dataframe(
+        duplicate_group_table(df_working, group["rows"]),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    group_decision_cols = st.columns(3)
+    with group_decision_cols[0]:
+        if st.button(
+            "Confirm Duplicates",
+            key=f"group_confirm_{group_id}",
+            type="primary",
+            use_container_width=True,
+        ):
+            set_group_decision_and_update_pairs(group, "duplicate", total_groups)
+    with group_decision_cols[1]:
+        if st.button(
+            "Not Duplicates",
+            key=f"group_not_{group_id}",
+            use_container_width=True,
+        ):
+            set_group_decision_and_update_pairs(group, "not_duplicate", total_groups)
+    with group_decision_cols[2]:
+        if st.button(
+            "Some Duplicates",
+            key=f"group_some_{group_id}",
+            use_container_width=True,
+        ):
+            set_group_decision_and_update_pairs(group, "some_duplicates", total_groups)
+
+    nav_cols = st.columns([1, 1, 2, 1])
+    with nav_cols[0]:
+        if st.button("Prev Group", disabled=group_idx == 0, use_container_width=True):
+            move_review_index(-1, total_groups)
+    with nav_cols[1]:
+        if st.button("Next Group", disabled=group_idx >= total_groups - 1, use_container_width=True):
+            move_review_index(1, total_groups)
+    with nav_cols[2]:
+        jump_to_group = st.number_input(
+            "Jump to group #",
+            min_value=1,
+            max_value=total_groups,
+            value=group_idx + 1,
+            step=1,
+            key=f"jump_group_{group_idx}_{total_groups}",
         )
+    with nav_cols[3]:
+        if st.button("Go to Group", key=f"go_group_{group_id}", use_container_width=True):
+            st.session_state["review_index"] = int(jump_to_group) - 1
+            st.rerun()
+
+    if st.session_state["group_decisions"].get(group_id) == "some_duplicates":
+        st.markdown("#### Pair review for this group")
+        st.caption(
+            "You selected 'Some Duplicates'. Review this group as pairs and mark each pair."
+        )
+        group_pairs = group["pairs"]
+
+        pair_idx = int(st.session_state["pair_review_index"].get(group_id, 0))
+        pair_idx = max(0, min(len(group_pairs) - 1, pair_idx))
+        st.session_state["pair_review_index"][group_id] = pair_idx
+
+        resolved_pairs = sum(
+            st.session_state["decisions"].get(pair["pair_id"]) in {"duplicate", "not_duplicate"}
+            for pair in group_pairs
+        )
+        st.write(f"Pair progress: {resolved_pairs} decided of {len(group_pairs)} pairs in this group.")
+        st.progress(resolved_pairs / len(group_pairs))
+
         st.dataframe(
-            duplicate_group_table(df_working, related_group_rows),
+            build_group_pairs_table(group, df_working, st.session_state["decisions"]),
             hide_index=True,
             use_container_width=True,
         )
 
-    left_col, right_col = st.columns(2)
-    with left_col:
-        st.markdown(f"#### Record A (row {candidate['i'] + 1})")
-        st.dataframe(detail_table(df_working, candidate["i"]), hide_index=True, use_container_width=True)
-        with st.expander("Show raw row A data"):
-            raw_a = df_original.iloc[[candidate["i"]]].T.reset_index()
-            raw_a.columns = ["Field", "Value"]
-            st.dataframe(raw_a, hide_index=True, use_container_width=True)
-
-    with right_col:
-        st.markdown(f"#### Record B (row {candidate['j'] + 1})")
-        st.dataframe(detail_table(df_working, candidate["j"]), hide_index=True, use_container_width=True)
-        with st.expander("Show raw row B data"):
-            raw_b = df_original.iloc[[candidate["j"]]].T.reset_index()
-            raw_b.columns = ["Field", "Value"]
-            st.dataframe(raw_b, hide_index=True, use_container_width=True)
-
-    decision_cols = st.columns(3)
-    with decision_cols[0]:
-        if st.button("Confirm duplicates", type="primary", use_container_width=True):
-            set_decision_and_advance(candidate["pair_id"], "duplicate", total_candidates)
-    with decision_cols[1]:
-        if st.button("Not duplicates", use_container_width=True):
-            set_decision_and_advance(candidate["pair_id"], "not_duplicate", total_candidates)
-    with decision_cols[2]:
-        if st.button("Skip", use_container_width=True):
-            set_decision_and_advance(candidate["pair_id"], "skipped", total_candidates)
-
-    nav_cols = st.columns([1, 1, 2, 1])
-    with nav_cols[0]:
-        if st.button("Prev", disabled=idx == 0, use_container_width=True):
-            move_review_index(-1, total_candidates)
-    with nav_cols[1]:
-        if st.button("Next", disabled=idx >= total_candidates - 1, use_container_width=True):
-            move_review_index(1, total_candidates)
-    with nav_cols[2]:
-        jump_to = st.number_input(
-            "Jump to pair #",
-            min_value=1,
-            max_value=total_candidates,
-            value=idx + 1,
-            step=1,
-            key=f"jump_to_{idx}",
+        active_pair = group_pairs[pair_idx]
+        st.markdown(
+            f"##### Pair {pair_idx + 1} of {len(group_pairs)} "
+            f"(rows {active_pair['i'] + 1} and {active_pair['j'] + 1})"
         )
-    with nav_cols[3]:
-        if st.button("Go", use_container_width=True):
-            st.session_state["review_index"] = int(jump_to) - 1
-            st.rerun()
+        st.metric("Pair score", f"{active_pair['score']:.1f}")
+        st.write("**Reasons:** " + "; ".join(active_pair["reasons"]))
+        pair_decision = st.session_state["decisions"].get(active_pair["pair_id"], "pending")
+        st.caption(f"Current pair decision: {pair_decision}")
+
+        left_col, right_col = st.columns(2)
+        with left_col:
+            st.markdown(f"#### Record A (row {active_pair['i'] + 1})")
+            st.dataframe(
+                detail_table(df_working, active_pair["i"]),
+                hide_index=True,
+                use_container_width=True,
+            )
+        with right_col:
+            st.markdown(f"#### Record B (row {active_pair['j'] + 1})")
+            st.dataframe(
+                detail_table(df_working, active_pair["j"]),
+                hide_index=True,
+                use_container_width=True,
+            )
+
+        pair_decision_cols = st.columns(2)
+        with pair_decision_cols[0]:
+            if st.button(
+                "Confirm Duplicates (Pair)",
+                key=f"pair_confirm_{group_id}_{pair_idx}",
+                type="primary",
+                use_container_width=True,
+            ):
+                set_pair_decision_and_advance(group_id, group_pairs, "duplicate")
+        with pair_decision_cols[1]:
+            if st.button(
+                "Not Duplicates (Pair)",
+                key=f"pair_not_{group_id}_{pair_idx}",
+                use_container_width=True,
+            ):
+                set_pair_decision_and_advance(group_id, group_pairs, "not_duplicate")
+
+        pair_nav_cols = st.columns([1, 1, 2, 1])
+        with pair_nav_cols[0]:
+            if st.button(
+                "Prev Pair",
+                key=f"prev_pair_{group_id}_{pair_idx}",
+                disabled=pair_idx == 0,
+                use_container_width=True,
+            ):
+                move_group_pair_index(group_id, -1, len(group_pairs))
+        with pair_nav_cols[1]:
+            if st.button(
+                "Next Pair",
+                key=f"next_pair_{group_id}_{pair_idx}",
+                disabled=pair_idx >= len(group_pairs) - 1,
+                use_container_width=True,
+            ):
+                move_group_pair_index(group_id, 1, len(group_pairs))
+        with pair_nav_cols[2]:
+            jump_pair = st.number_input(
+                "Jump to pair # in this group",
+                min_value=1,
+                max_value=len(group_pairs),
+                value=pair_idx + 1,
+                step=1,
+                key=f"jump_pair_{group_id}_{pair_idx}",
+            )
+        with pair_nav_cols[3]:
+            if st.button(
+                "Go to Pair",
+                key=f"go_pair_{group_id}_{pair_idx}",
+                use_container_width=True,
+            ):
+                st.session_state["pair_review_index"][group_id] = int(jump_pair) - 1
+                st.rerun()
 
     st.divider()
     st.subheader("Candidate table (first 50)")
