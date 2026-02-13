@@ -5,13 +5,14 @@ A local Streamlit web app for non-technical users to upload participant lists, d
 ## What this app does
 
 1. Uploads a participant file (`.csv` or `.xlsx`)
-2. Standardizes expected fields (missing fields are treated as empty)
-3. Scores likely duplicate pairs using fuzzy + exact signals
-4. Lets users review one candidate pair at a time:
+2. Prompts for Program PPF (default `1.6`) after upload
+3. Standardizes expected fields (missing fields are treated as empty)
+4. Scores likely duplicate pairs using fuzzy + exact signals
+5. Lets users review one candidate pair at a time:
    - Confirm duplicates
    - Not duplicates
    - Skip
-5. Exports an Excel workbook with:
+6. Exports an Excel workbook with:
    - `Original` sheet: unchanged uploaded data
    - `Deduped` sheet: original data plus `dupe` column (`1` duplicate, `0` not duplicate)
 
@@ -42,6 +43,20 @@ The app looks for these labels (case/spacing-insensitive matching with aliases):
 - Age Group
 - Ethnicity
 - Affiliation
+- Contact Preference
+- UTM Medium
+- Total Referrals
+- Referral Feedback
+- Feedback Group
+- Gross Feedback
+- Company Suggestions
+- HXC Program Feedback
+- Over Program Limit (>75)
+- Insights Elig. Feedback
+- Elig. Feedback
+- Feedback Left to Give
+- Payout Elig. Feedback (Last 300 Days)
+- Payout Elig. Net
 
 Optional extra signal:
 
@@ -69,6 +84,10 @@ The app normalizes configured weights to sum to 1.0.
 - Device exact match
 - City/ZIP or City/Country exact match
 - Affiliation exact match
+- Contact preference / UTM medium / feedback-group exact matches
+- Total referrals exact match
+- Payout eligibility feedback exact match
+- Payout net near-exact and PPF-adjusted alignment using Program PPF
 - Close signup dates
 
 Candidate pairs are sorted by score descending.

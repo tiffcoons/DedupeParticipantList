@@ -31,6 +31,25 @@ EXPECTED_COLUMNS = [
 
 OPTIONAL_COLUMNS = ["Phone"]
 
+ADDITIONAL_COLUMNS = [
+    "Contact Preference",
+    "UTM Medium",
+    "Total Referrals",
+    "Referral Feedback",
+    "Feedback Group",
+    "Gross Feedback",
+    "Company Suggestions",
+    "HXC Program Feedback",
+    "Over Program Limit (>75)",
+    "Insights Elig. Feedback",
+    "Elig. Feedback",
+    "Feedback Left to Give",
+    "Payout Elig. Feedback (Last 300 Days)",
+    "Payout Elig. Net",
+]
+
+STANDARDIZED_COLUMNS = EXPECTED_COLUMNS + OPTIONAL_COLUMNS + ADDITIONAL_COLUMNS
+
 FIELD_ALIASES = {
     "Participant ID": ["ParticipantID", "Respondent ID", "User ID"],
     "Already Flagged?": ["Already Flagged", "Flagged", "Is Flagged"],
@@ -52,6 +71,27 @@ FIELD_ALIASES = {
     "Ethnicity": [],
     "Affiliation": ["Organization", "Organisation", "Employer"],
     "Phone": ["Phone Number", "Mobile", "Cell", "Cell Phone", "Telephone"],
+    "Contact Preference": ["ContactPref", "Preferred Contact"],
+    "UTM Medium": ["UTM_Medium", "Utm Medium"],
+    "Total Referrals": ["Referrals Total", "Referral Count"],
+    "Referral Feedback": [],
+    "Feedback Group": [],
+    "Gross Feedback": [],
+    "Company Suggestions": ["Company Suggestion"],
+    "HXC Program Feedback": ["HXC Feedback", "Program Feedback"],
+    "Over Program Limit (>75)": [
+        "Over Program Limit",
+        "Over Program Limit (> 75)",
+        "Over Program Limit (75+)",
+    ],
+    "Insights Elig. Feedback": ["Insights Eligibility Feedback", "Insights Elig Feedback"],
+    "Elig. Feedback": ["Eligibility Feedback", "Elig Feedback"],
+    "Feedback Left to Give": [],
+    "Payout Elig. Feedback (Last 300 Days)": [
+        "Payout Eligibility Feedback (Last 300 Days)",
+        "Payout Elig Feedback (Last 300 Days)",
+    ],
+    "Payout Elig. Net": ["Payout Eligibility Net", "Payout Net"],
 }
 
 
@@ -65,6 +105,7 @@ def init_session_state() -> None:
         "decisions": {},
         "review_index": 0,
         "total_pairs_examined": 0,
+        "program_ppf": 1.6,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -107,6 +148,17 @@ def normalize_generic(value: Any) -> str:
     return clean_text(value).lower()
 
 
+def parse_number(value: Any) -> Optional[float]:
+    raw = clean_text(value)
+    if not raw:
+        return None
+    normalized = raw.replace(",", "").replace("$", "")
+    try:
+        return float(normalized)
+    except ValueError:
+        return None
+
+
 def read_uploaded_file(uploaded_file) -> pd.DataFrame:
     file_name = uploaded_file.name.lower()
     uploaded_file.seek(0)
@@ -140,7 +192,7 @@ def map_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
 def standardize_dataframe(df_original: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Optional[str]]]:
     mapping = map_columns(df_original)
     standardized = pd.DataFrame(index=df_original.index)
-    for field in EXPECTED_COLUMNS + OPTIONAL_COLUMNS:
+    for field in STANDARDIZED_COLUMNS:
         source_col = mapping.get(field)
         if source_col and source_col in df_original.columns:
             standardized[field] = df_original[source_col]
@@ -168,6 +220,19 @@ def prepare_features(df_working: pd.DataFrame) -> Dict[str, List[Any]]:
         "participant_id": df_working["Participant ID"].map(normalize_generic).tolist(),
         "original_signup_id": df_working["Original Signup ID"].map(normalize_generic).tolist(),
         "affiliation": df_working["Affiliation"].map(normalize_generic).tolist(),
+        "contact_preference": df_working["Contact Preference"].map(normalize_generic).tolist(),
+        "utm_medium": df_working["UTM Medium"].map(normalize_generic).tolist(),
+        "feedback_group": df_working["Feedback Group"].map(normalize_generic).tolist(),
+        "over_program_limit": df_working["Over Program Limit (>75)"].map(normalize_generic).tolist(),
+        "total_referrals": df_working["Total Referrals"].map(parse_number).tolist(),
+        "gross_feedback": df_working["Gross Feedback"].map(parse_number).tolist(),
+        "insights_elig_feedback": df_working["Insights Elig. Feedback"].map(parse_number).tolist(),
+        "elig_feedback": df_working["Elig. Feedback"].map(parse_number).tolist(),
+        "feedback_left_to_give": df_working["Feedback Left to Give"].map(parse_number).tolist(),
+        "payout_elig_feedback_300d": df_working["Payout Elig. Feedback (Last 300 Days)"]
+        .map(parse_number)
+        .tolist(),
+        "payout_elig_net": df_working["Payout Elig. Net"].map(parse_number).tolist(),
     }
     features["create_dt"] = pd.to_datetime(df_working["Create Date"], errors="coerce").tolist()
     return features
@@ -178,6 +243,7 @@ def score_pair(
     j: int,
     features: Dict[str, List[Any]],
     weights: Dict[str, float],
+    program_ppf: float,
 ) -> Dict[str, Any]:
     name_a = features["full_name"][i]
     name_b = features["full_name"][j]
@@ -287,6 +353,75 @@ def score_pair(
         bonus += 1.0
         reasons.append("Affiliation exact match")
 
+    contact_preference_exact = bool(
+        features["contact_preference"][i]
+        and features["contact_preference"][j]
+        and features["contact_preference"][i] == features["contact_preference"][j]
+    )
+    if contact_preference_exact:
+        bonus += 0.5
+        reasons.append("Contact preference exact match")
+
+    utm_medium_exact = bool(
+        features["utm_medium"][i]
+        and features["utm_medium"][j]
+        and features["utm_medium"][i] == features["utm_medium"][j]
+    )
+    if utm_medium_exact:
+        bonus += 0.75
+        reasons.append("UTM medium exact match")
+
+    feedback_group_exact = bool(
+        features["feedback_group"][i]
+        and features["feedback_group"][j]
+        and features["feedback_group"][i] == features["feedback_group"][j]
+    )
+    if feedback_group_exact:
+        bonus += 0.5
+        reasons.append("Feedback group exact match")
+
+    over_program_limit_exact = bool(
+        features["over_program_limit"][i]
+        and features["over_program_limit"][j]
+        and features["over_program_limit"][i] == features["over_program_limit"][j]
+    )
+    if over_program_limit_exact:
+        bonus += 0.5
+        reasons.append("Over-program-limit flag exact match")
+
+    total_referrals_a = features["total_referrals"][i]
+    total_referrals_b = features["total_referrals"][j]
+    if (
+        total_referrals_a is not None
+        and total_referrals_b is not None
+        and abs(total_referrals_a - total_referrals_b) < 0.001
+    ):
+        bonus += 0.5
+        reasons.append("Total referrals exact match")
+
+    payout_feedback_a = features["payout_elig_feedback_300d"][i]
+    payout_feedback_b = features["payout_elig_feedback_300d"][j]
+    if (
+        payout_feedback_a is not None
+        and payout_feedback_b is not None
+        and abs(payout_feedback_a - payout_feedback_b) < 0.001
+    ):
+        bonus += 0.75
+        reasons.append("Payout-eligible feedback (300 days) exact match")
+
+    payout_net_a = features["payout_elig_net"][i]
+    payout_net_b = features["payout_elig_net"][j]
+    if payout_net_a is not None and payout_net_b is not None:
+        if abs(payout_net_a - payout_net_b) <= 0.05:
+            bonus += 0.75
+            reasons.append("Payout eligible net exact/near-exact")
+        elif program_ppf > 0:
+            ppf_units_a = payout_net_a / program_ppf
+            ppf_units_b = payout_net_b / program_ppf
+            if abs(ppf_units_a - ppf_units_b) <= 0.1:
+                bonus += 0.5
+                reasons.append("Payout eligible net aligns by program PPF")
+
     dt_a = features["create_dt"][i]
     dt_b = features["create_dt"][j]
     if pd.notna(dt_a) and pd.notna(dt_b):
@@ -327,6 +462,7 @@ def generate_candidates(
     threshold: float,
     max_candidates: int,
     weights: Dict[str, float],
+    program_ppf: float,
 ) -> Tuple[List[Dict[str, Any]], int]:
     if len(df_working) < 2:
         return [], 0
@@ -338,7 +474,7 @@ def generate_candidates(
     serial = 0
     for i in range(len(df_working) - 1):
         for j in range(i + 1, len(df_working)):
-            candidate = score_pair(i, j, features, weights)
+            candidate = score_pair(i, j, features, weights, program_ppf)
             serial += 1
             if candidate["score"] < threshold:
                 continue
@@ -425,7 +561,7 @@ def decision_counts(decisions: Dict[str, str]) -> Tuple[int, int]:
 
 
 def detail_table(df_working: pd.DataFrame, row_idx: int) -> pd.DataFrame:
-    fields = EXPECTED_COLUMNS + OPTIONAL_COLUMNS
+    fields = STANDARDIZED_COLUMNS
     rows = []
     for field in fields:
         rows.append({"Field": field, "Value": clean_text(df_working.at[row_idx, field])})
@@ -471,6 +607,20 @@ def duplicate_group_table(df_working: pd.DataFrame, row_indices: List[int]) -> p
         "City Name",
         "Country Name",
         "Affiliation",
+        "Contact Preference",
+        "UTM Medium",
+        "Total Referrals",
+        "Referral Feedback",
+        "Feedback Group",
+        "Gross Feedback",
+        "Company Suggestions",
+        "HXC Program Feedback",
+        "Over Program Limit (>75)",
+        "Insights Elig. Feedback",
+        "Elig. Feedback",
+        "Feedback Left to Give",
+        "Payout Elig. Feedback (Last 300 Days)",
+        "Payout Elig. Net",
     ]
     rows: List[Dict[str, Any]] = []
     for row_idx in row_indices:
@@ -579,6 +729,7 @@ def main() -> None:
         st.session_state["df_original"] = df_original
         st.session_state["df_working"] = df_working
         st.session_state["column_mapping"] = mapping
+        st.session_state["program_ppf"] = 1.6
         reset_review_state()
 
     df_original = st.session_state["df_original"]
@@ -591,8 +742,19 @@ def main() -> None:
     st.subheader("Data preview")
     st.dataframe(df_original.head(20), use_container_width=True, hide_index=True)
 
+    st.subheader("Program settings")
+    program_ppf = st.number_input(
+        "Program PPF",
+        min_value=0.0,
+        value=float(st.session_state["program_ppf"]),
+        step=0.1,
+        format="%.2f",
+        help="Program PPF used for payout-related matching signals. Default is 1.6.",
+    )
+    st.session_state["program_ppf"] = float(program_ppf)
+
     mapping_rows = []
-    for field in EXPECTED_COLUMNS + OPTIONAL_COLUMNS:
+    for field in STANDARDIZED_COLUMNS:
         source = st.session_state["column_mapping"].get(field)
         mapping_rows.append(
             {
@@ -630,6 +792,7 @@ def main() -> None:
                 threshold=float(threshold),
                 max_candidates=int(max_candidates),
                 weights=normalized_weights,
+                program_ppf=float(st.session_state["program_ppf"]),
             )
         st.session_state["candidates"] = candidates
         st.session_state["decisions"] = {}
