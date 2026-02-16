@@ -19,6 +19,14 @@ A local Streamlit web app for non-technical users to upload participant lists, d
      - `dupe participant id` (canonical participant id for dedupe grouping)
      - `dedupe eligible` (participant-id + affiliation eligibility sum, capped at 75; only first/original row has value)
      - `Total Value` (`dedupe eligible * Program PPF`; only first/original row has value)
+7. Adds **Download Program Report Out** export:
+   - Includes `Original` and `Deduped`
+   - Adds a third tab: `For Partner`
+   - `For Partner` summarizes by `Affiliation` + `Affiliation 2` and outputs:
+     - `Organization`
+     - `Sign Ups` (count of `Email`)
+     - `Total Eligible Feedback` (sum of `dedupe eligible`)
+     - `Total $ Created` (sum of `Total Value`)
 
 Everything runs locally (no external API calls).
 

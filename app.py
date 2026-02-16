@@ -1010,6 +1010,82 @@ def build_export_bytes(df_original: pd.DataFrame, deduped_df: pd.DataFrame) -> b
     return output.getvalue()
 
 
+def build_partner_report_table(deduped_df: pd.DataFrame) -> pd.DataFrame:
+    report_source = deduped_df.copy()
+
+    if "Affiliation 2" not in report_source.columns and "Affiliation2" in report_source.columns:
+        report_source["Affiliation 2"] = report_source["Affiliation2"]
+    if "Affiliation" not in report_source.columns:
+        report_source["Affiliation"] = ""
+    if "Affiliation 2" not in report_source.columns:
+        report_source["Affiliation 2"] = ""
+    if "Email" not in report_source.columns:
+        report_source["Email"] = ""
+
+    report_source["_affiliation"] = report_source["Affiliation"].map(clean_text)
+    report_source["_affiliation_2"] = report_source["Affiliation 2"].map(clean_text)
+    report_source["_email_non_empty"] = report_source["Email"].map(lambda value: 1 if clean_text(value) else 0)
+    report_source["_dedupe_eligible_num"] = pd.to_numeric(
+        report_source.get("dedupe eligible", 0),
+        errors="coerce",
+    ).fillna(0.0)
+    report_source["_total_value_num"] = pd.to_numeric(
+        report_source.get("Total Value", 0),
+        errors="coerce",
+    ).fillna(0.0)
+
+    grouped = (
+        report_source.groupby(["_affiliation", "_affiliation_2"], dropna=False, as_index=False)
+        .agg(
+            sign_ups=("_email_non_empty", "sum"),
+            total_eligible_feedback=("_dedupe_eligible_num", "sum"),
+            total_value_created=("_total_value_num", "sum"),
+        )
+        .sort_values(by=["_affiliation", "_affiliation_2"], kind="stable")
+    )
+
+    def org_label(affiliation: Any, affiliation_2: Any) -> str:
+        primary = clean_text(affiliation)
+        secondary = clean_text(affiliation_2)
+        if primary and secondary:
+            return f"{primary} | {secondary}"
+        if primary:
+            return primary
+        if secondary:
+            return secondary
+        return "(blank)"
+
+    grouped["Organization"] = grouped.apply(
+        lambda row: org_label(row["_affiliation"], row["_affiliation_2"]),
+        axis=1,
+    )
+    grouped["sign_ups"] = grouped["sign_ups"].astype(int)
+    grouped["total_eligible_feedback"] = grouped["total_eligible_feedback"].round(2)
+    grouped["total_value_created"] = grouped["total_value_created"].round(2)
+
+    partner_report = grouped[
+        ["Organization", "sign_ups", "total_eligible_feedback", "total_value_created"]
+    ].rename(
+        columns={
+            "sign_ups": "Sign Ups",
+            "total_eligible_feedback": "Total Eligible Feedback",
+            "total_value_created": "Total $ Created",
+        }
+    )
+    return partner_report
+
+
+def build_program_report_out_bytes(df_original: pd.DataFrame, deduped_df: pd.DataFrame) -> bytes:
+    partner_report = build_partner_report_table(deduped_df)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df_original.to_excel(writer, sheet_name="Original", index=False)
+        deduped_df.to_excel(writer, sheet_name="Deduped", index=False)
+        partner_report.to_excel(writer, sheet_name="For Partner", index=False)
+    output.seek(0)
+    return output.getvalue()
+
+
 def main() -> None:
     st.set_page_config(page_title="Participant Sign-up Deduplication", layout="wide")
     inject_custom_styles()
@@ -1432,6 +1508,21 @@ def main() -> None:
         label="Download Excel export",
         data=export_bytes,
         file_name="participant_dedupe_review.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+    st.divider()
+    st.subheader("Download Program Report Out")
+    st.write(
+        "Downloads the same export plus a third `For Partner` tab with organization-level "
+        "summary metrics."
+    )
+    report_out_bytes = build_program_report_out_bytes(df_original, deduped)
+    st.download_button(
+        label="Download Program Report Out",
+        data=report_out_bytes,
+        file_name="program_report_out.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
