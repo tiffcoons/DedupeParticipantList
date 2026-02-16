@@ -95,6 +95,136 @@ FIELD_ALIASES = {
 }
 
 
+def inject_custom_styles() -> None:
+    st.markdown(
+        """
+        <style>
+            :root {
+                --co-blue: #0077c8;
+                --co-blue-dark: #005fa3;
+                --co-text: #212121;
+                --co-muted: #6c757d;
+                --co-bg: #ececec;
+                --co-card: #f7f7f7;
+                --co-border: #c7c7c7;
+            }
+
+            html, body, [class*="css"] {
+                font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+                color: var(--co-text);
+            }
+
+            .stApp {
+                background: var(--co-bg);
+            }
+
+            [data-testid="stHeader"] {
+                background: transparent;
+            }
+
+            .main .block-container {
+                background: var(--co-card);
+                border: 1px solid #d8d8d8;
+                border-radius: 14px;
+                padding-top: 1.25rem;
+                padding-bottom: 1.5rem;
+                box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+            }
+
+            h1 {
+                text-align: center;
+                font-size: 1.6rem;
+                font-weight: 600;
+                margin-bottom: 0.25rem;
+            }
+
+            h2, h3 {
+                color: var(--co-text);
+                font-weight: 600;
+            }
+
+            p, .stMarkdown, .stCaption, label {
+                color: var(--co-text);
+            }
+
+            [data-testid="stCaptionContainer"] p {
+                color: var(--co-muted);
+            }
+
+            div[data-testid="stButton"] button {
+                border-radius: 9px;
+                font-weight: 500;
+                min-height: 40px;
+            }
+
+            div[data-testid="stButton"] button[kind="primary"] {
+                background: var(--co-blue);
+                border: 1px solid var(--co-blue);
+                color: #ffffff;
+            }
+
+            div[data-testid="stButton"] button[kind="primary"]:hover {
+                background: var(--co-blue-dark);
+                border-color: var(--co-blue-dark);
+                color: #ffffff;
+            }
+
+            div[data-testid="stButton"] button[kind="secondary"] {
+                background: #ffffff;
+                color: var(--co-blue);
+                border: 1px solid #8ab8da;
+            }
+
+            div[data-testid="stButton"] button[kind="secondary"]:hover {
+                border-color: var(--co-blue);
+                color: var(--co-blue-dark);
+            }
+
+            [data-testid="stFileUploader"] {
+                border: 1px dashed #97bdd8;
+                border-radius: 10px;
+                background: #ffffff;
+                padding: 0.5rem;
+            }
+
+            div[data-baseweb="input"] > div,
+            div[data-baseweb="textarea"] > div {
+                border-radius: 9px;
+                border-color: var(--co-border);
+                background: #ffffff;
+            }
+
+            .stTextInput input,
+            .stNumberInput input,
+            textarea {
+                border-radius: 9px !important;
+            }
+
+            [data-testid="stDataFrame"] {
+                border: 1px solid #d7d7d7;
+                border-radius: 10px;
+                overflow: hidden;
+                background: #ffffff;
+            }
+
+            [data-testid="stMetricValue"] {
+                color: var(--co-blue);
+            }
+
+            [data-testid="stSidebar"] {
+                background: #f3f3f3;
+                border-left: 1px solid #d5d5d5;
+            }
+
+            [data-testid="stProgressBar"] div[role="progressbar"] {
+                background: var(--co-blue);
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def init_session_state() -> None:
     defaults = {
         "upload_token": None,
@@ -864,6 +994,7 @@ def build_export_bytes(df_original: pd.DataFrame, deduped_df: pd.DataFrame) -> b
 
 def main() -> None:
     st.set_page_config(page_title="Participant Sign-up Deduplication", layout="wide")
+    inject_custom_styles()
     init_session_state()
 
     st.title("Participant Sign-up Deduplication")
