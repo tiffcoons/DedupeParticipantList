@@ -130,6 +130,7 @@ Candidate pairs are sorted by score descending.
 - **Exact name match section**:
   - Groups containing First + Last exact-name matches are shown together in one place
   - Users can click **Confirm All Exact Name Match Groups** to confirm those groups at once
+  - After confirmation, the section shows: **Exact Name Matches Confirmed and Saved**
 - Only the remaining groups are shown in the regular review workflow
 - Review groups in a table with:
   - Confirm Duplicates
@@ -138,7 +139,8 @@ Candidate pairs are sorted by score descending.
   - Prev / Next / Jump to group number
 - If **Some Duplicates** is selected, the app switches that group to pair-by-pair review so each pair can be marked independently
 - Progress shows decided/in-progress/total group counts
-- A table of the first 50 candidates appears below the review panel
+- After each group/pair decision, the app advances to the next not-reviewed item and loops through unresolved items
+- When everything is complete, the app shows: **All groups/pairs have been reviewed.**
 
 When exporting, confirmed duplicate links are grouped transitively (A-B and B-C means A/B/C group). One primary record in each group stays `dupe=0`; others are marked `dupe=1`.
 
@@ -193,5 +195,5 @@ Blocking reduces comparisons and is the standard next step for scaling.
 - Invalid file type -> clear error message
 - Empty file -> clear error message
 - Too few rows -> warning
-- Missing mapped fields -> shown in mapping table and treated as empty
+- Missing mapped fields -> treated as empty
 
