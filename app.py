@@ -6,11 +6,16 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 from rapidfuzz import fuzz
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import inch
-from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+REPORTLAB_AVAILABLE = True
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import inch
+    from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+except ModuleNotFoundError:
+    REPORTLAB_AVAILABLE = False
 
 
 EXPECTED_COLUMNS = [
@@ -1095,6 +1100,9 @@ def resolve_logo_path() -> Optional[str]:
 
 
 def build_for_partner_pdf_bytes(partner_report: pd.DataFrame, logo_path: Optional[str]) -> bytes:
+    if not REPORTLAB_AVAILABLE:
+        raise RuntimeError("reportlab is required for PDF export.")
+
     output = io.BytesIO()
     doc = SimpleDocTemplate(
         output,
@@ -1612,21 +1620,27 @@ def main() -> None:
     st.divider()
     st.subheader("Download For Partner PDF")
     st.write("Download only the For Partner tab as a PDF report.")
-    partner_report = build_partner_report_table(deduped)
-    logo_path = resolve_logo_path()
-    if logo_path is None:
-        st.caption(
-            "Logo file not found in default paths. Set HUNDREDX_LOGO_PATH or place the logo in "
-            "/workspace/hundredx-logo.png to include it in the PDF header."
+    if not REPORTLAB_AVAILABLE:
+        st.warning(
+            "PDF export requires the `reportlab` package. Install dependencies with "
+            "`pip install -r requirements.txt`."
         )
-    for_partner_pdf = build_for_partner_pdf_bytes(partner_report, logo_path)
-    st.download_button(
-        label="Download For Partner PDF",
-        data=for_partner_pdf,
-        file_name="for_partner_report.pdf",
-        mime="application/pdf",
-        use_container_width=True,
-    )
+    else:
+        partner_report = build_partner_report_table(deduped)
+        logo_path = resolve_logo_path()
+        if logo_path is None:
+            st.caption(
+                "Logo file not found in default paths. Set HUNDREDX_LOGO_PATH or place the logo in "
+                "/workspace/hundredx-logo.png to include it in the PDF header."
+            )
+        for_partner_pdf = build_for_partner_pdf_bytes(partner_report, logo_path)
+        st.download_button(
+            label="Download For Partner PDF",
+            data=for_partner_pdf,
+            file_name="for_partner_report.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
 
 
 if __name__ == "__main__":
