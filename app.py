@@ -18,13 +18,17 @@ source = st.radio(
     horizontal=True,
 )
 
-df = None  # will hold the loaded participant data
+# Clear stored data when the user switches source
+if st.session_state.get("last_source") != source:
+    st.session_state.pop("participant_df", None)
+    st.session_state["last_source"] = source
 
 # ── CSV path ──────────────────────────────────
 if source == "Upload CSV":
     uploaded = st.file_uploader("Upload participant list CSV", type=["csv"])
     if uploaded is not None:
         df = pd.read_csv(uploaded)
+        st.session_state["participant_df"] = df
         st.success(f"Loaded {len(df):,} rows from CSV.")
 
 # ── BigQuery path ─────────────────────────────
@@ -113,13 +117,11 @@ else:
             except Exception as e:
                 st.error(f"Query failed: {e}")
 
-    # Restore from session state if query was already run
-    if df is None and "participant_df" in st.session_state:
-        df = st.session_state["participant_df"]
+# ─────────────────────────────────────────────
+# Downstream processing (same for both sources)
+# ─────────────────────────────────────────────
+df = st.session_state.get("participant_df")
 
-# ─────────────────────────────────────────────
-# Results / downstream processing
-# ─────────────────────────────────────────────
 if df is not None:
     st.divider()
     st.subheader(f"Participant List — {len(df):,} rows")
