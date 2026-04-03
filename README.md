@@ -23,10 +23,14 @@ A local Streamlit web app for non-technical users to upload participant lists, d
    - Includes `Original` and `Deduped`
    - Adds a third tab: `For Partner`
    - `For Partner` summarizes by `Affiliation` + `Affiliation 2` and outputs:
-     - `Organization`
+     - `Program`
+     - `Affiliation`
      - `Sign Ups` (count of `Email`)
      - `Total Eligible Feedback` (sum of `dedupe eligible`)
      - `Total $ Created` (sum of `Total Value`)
+8. Adds **Download For Partner PDF**:
+   - Exports only the `For Partner` report as PDF
+   - Includes a HundredX logo header when a logo file is available
 
 Everything runs locally (no external API calls).
 
@@ -149,6 +153,7 @@ Candidate pairs are sorted by score descending.
 - Progress shows decided/in-progress/total group counts
 - After each group/pair decision, the app advances to the next not-reviewed item and loops through unresolved items
 - When everything is complete, the app shows: **All groups/pairs have been reviewed.**
+- Group review table includes demographic columns while excluding the removed feedback-heavy columns.
 
 When exporting, confirmed duplicate links are grouped transitively (A-B and B-C means A/B/C group). One primary record in each group stays `dupe=0`; others are marked `dupe=1`.
 

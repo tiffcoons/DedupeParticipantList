@@ -1,10 +1,16 @@
 import io
+import os
 from heapq import heappush, heappushpop
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
 from rapidfuzz import fuzz
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
 EXPECTED_COLUMNS = [
@@ -46,6 +52,7 @@ ADDITIONAL_COLUMNS = [
     "Feedback Left to Give",
     "Payout Elig. Feedback (Last 300 Days)",
     "Payout Elig. Net",
+    "Affiliation 2",
 ]
 
 STANDARDIZED_COLUMNS = EXPECTED_COLUMNS + OPTIONAL_COLUMNS + ADDITIONAL_COLUMNS
@@ -92,6 +99,7 @@ FIELD_ALIASES = {
         "Payout Elig Feedback (Last 300 Days)",
     ],
     "Payout Elig. Net": ["Payout Eligibility Net", "Payout Net"],
+    "Affiliation 2": ["Affiliation2", "Organization 2", "Program"],
 }
 
 
@@ -832,23 +840,18 @@ def duplicate_group_table(df_working: pd.DataFrame, row_indices: List[int]) -> p
         "Email",
         "Phone",
         "Signup IP",
-        "City Name",
         "Country Name",
+        "City Name",
+        "Zip Code",
         "Affiliation",
+        "Affiliation 2",
+        "Gender",
+        "Age Group",
+        "Ethnicity",
         "Contact Preference",
         "UTM Medium",
         "Total Referrals",
         "Referral Feedback",
-        "Feedback Group",
-        "Gross Feedback",
-        "Company Suggestions",
-        "HXC Program Feedback",
-        "Over Program Limit (>75)",
-        "Insights Elig. Feedback",
-        "Elig. Feedback",
-        "Feedback Left to Give",
-        "Payout Elig. Feedback (Last 300 Days)",
-        "Payout Elig. Net",
     ]
     rows: List[Dict[str, Any]] = []
     for row_idx in row_indices:
@@ -1044,29 +1047,16 @@ def build_partner_report_table(deduped_df: pd.DataFrame) -> pd.DataFrame:
         .sort_values(by=["_affiliation", "_affiliation_2"], kind="stable")
     )
 
-    def org_label(affiliation: Any, affiliation_2: Any) -> str:
-        primary = clean_text(affiliation)
-        secondary = clean_text(affiliation_2)
-        if primary and secondary:
-            return f"{primary} | {secondary}"
-        if primary:
-            return primary
-        if secondary:
-            return secondary
-        return "(blank)"
-
-    grouped["Organization"] = grouped.apply(
-        lambda row: org_label(row["_affiliation"], row["_affiliation_2"]),
-        axis=1,
-    )
     grouped["sign_ups"] = grouped["sign_ups"].astype(int)
     grouped["total_eligible_feedback"] = grouped["total_eligible_feedback"].round(2)
     grouped["total_value_created"] = grouped["total_value_created"].round(2)
 
     partner_report = grouped[
-        ["Organization", "sign_ups", "total_eligible_feedback", "total_value_created"]
+        ["_affiliation", "_affiliation_2", "sign_ups", "total_eligible_feedback", "total_value_created"]
     ].rename(
         columns={
+            "_affiliation": "Program",
+            "_affiliation_2": "Affiliation",
             "sign_ups": "Sign Ups",
             "total_eligible_feedback": "Total Eligible Feedback",
             "total_value_created": "Total $ Created",
@@ -1082,6 +1072,98 @@ def build_program_report_out_bytes(df_original: pd.DataFrame, deduped_df: pd.Dat
         df_original.to_excel(writer, sheet_name="Original", index=False)
         deduped_df.to_excel(writer, sheet_name="Deduped", index=False)
         partner_report.to_excel(writer, sheet_name="For Partner", index=False)
+    output.seek(0)
+    return output.getvalue()
+
+
+def resolve_logo_path() -> Optional[str]:
+    env_logo = os.getenv("HUNDREDX_LOGO_PATH")
+    candidate_paths = [
+        env_logo or "",
+        "/workspace/hundredx-logo.png",
+        "/workspace/hundredx.png",
+        "/workspace/logo.png",
+        "/workspace/assets/hundredx-logo.png",
+        "/workspace/assets/hundredx.png",
+        "/workspace/images/hundredx-logo.png",
+        "/workspace/images/hundredx.png",
+    ]
+    for path in candidate_paths:
+        if path and os.path.exists(path):
+            return path
+    return None
+
+
+def build_for_partner_pdf_bytes(partner_report: pd.DataFrame, logo_path: Optional[str]) -> bytes:
+    output = io.BytesIO()
+    doc = SimpleDocTemplate(
+        output,
+        pagesize=letter,
+        topMargin=0.55 * inch,
+        bottomMargin=0.5 * inch,
+        leftMargin=0.5 * inch,
+        rightMargin=0.5 * inch,
+    )
+    story: List[Any] = []
+
+    if logo_path and os.path.exists(logo_path):
+        try:
+            reader = ImageReader(logo_path)
+            width_px, height_px = reader.getSize()
+            display_width = 2.8 * inch
+            display_height = display_width * (height_px / max(width_px, 1))
+            story.append(Image(logo_path, width=display_width, height=display_height))
+            story.append(Spacer(1, 0.12 * inch))
+        except Exception:
+            styles = getSampleStyleSheet()
+            story.append(Paragraph("hundredx", styles["Title"]))
+            story.append(Spacer(1, 0.12 * inch))
+    else:
+        styles = getSampleStyleSheet()
+        story.append(Paragraph("hundredx", styles["Title"]))
+        story.append(Spacer(1, 0.12 * inch))
+
+    styles = getSampleStyleSheet()
+    story.append(Paragraph("For Partner", styles["Heading2"]))
+    story.append(Spacer(1, 0.12 * inch))
+
+    table_columns = ["Program", "Affiliation", "Sign Ups", "Total Eligible Feedback", "Total $ Created"]
+    table_rows: List[List[Any]] = [table_columns]
+    if partner_report.empty:
+        table_rows.append(["(no rows)", "", 0, 0, 0])
+    else:
+        for _, row in partner_report.iterrows():
+            table_rows.append(
+                [
+                    clean_text(row.get("Program", "")),
+                    clean_text(row.get("Affiliation", "")),
+                    int(pd.to_numeric(row.get("Sign Ups", 0), errors="coerce") or 0),
+                    float(pd.to_numeric(row.get("Total Eligible Feedback", 0), errors="coerce") or 0),
+                    float(pd.to_numeric(row.get("Total $ Created", 0), errors="coerce") or 0),
+                ]
+            )
+
+    column_widths = [1.8 * inch, 1.8 * inch, 0.8 * inch, 1.5 * inch, 1.3 * inch]
+    table = Table(table_rows, colWidths=column_widths, repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0077c8")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#b0b0b0")),
+                ("BACKGROUND", (0, 1), (-1, -1), colors.white),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7fbff")]),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(table)
+    doc.build(story)
     output.seek(0)
     return output.getvalue()
 
@@ -1524,6 +1606,25 @@ def main() -> None:
         data=report_out_bytes,
         file_name="program_report_out.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+    st.divider()
+    st.subheader("Download For Partner PDF")
+    st.write("Download only the For Partner tab as a PDF report.")
+    partner_report = build_partner_report_table(deduped)
+    logo_path = resolve_logo_path()
+    if logo_path is None:
+        st.caption(
+            "Logo file not found in default paths. Set HUNDREDX_LOGO_PATH or place the logo in "
+            "/workspace/hundredx-logo.png to include it in the PDF header."
+        )
+    for_partner_pdf = build_for_partner_pdf_bytes(partner_report, logo_path)
+    st.download_button(
+        label="Download For Partner PDF",
+        data=for_partner_pdf,
+        file_name="for_partner_report.pdf",
+        mime="application/pdf",
         use_container_width=True,
     )
 
